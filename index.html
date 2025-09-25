@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Dashboard RELAS</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/recharts@2.8.0/lib/index.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide-react@latest/dist/umd/lucide-react.js"></script>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell, ResponsiveContainer } = Recharts;
+        const { RefreshCw, Users, Building2, CheckCircle, HelpCircle, TrendingUp, Upload, FileText } = LucideReact;
+
+        const Dashboard = () => {
+            const [data, setData] = useState([]);
+            const [loading, setLoading] = useState(false);
+            const [lastUpdate, setLastUpdate] = useState(null);
+            const [isConfigured, setIsConfigured] = useState(false);
+            const [errorMessage, setErrorMessage] = useState('');
+            const [stats, setStats] = useState({});
+
+            // Manejar carga de archivo CSV
+            const handleFileUpload = async (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                setLoading(true);
+                setErrorMessage('');
+
+                try {
+                    const text = await file.text();
+                    
+                    // Parsear CSV de forma simple
+                    const lines = text.split('\n').filter(line => line.trim());
+                    const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim());
+                    
+                    const csvData = [];
+                    for (let i = 1; i < lines.length; i++) {
+                        const values = parseCSVLine(lines[i]);
+                        if (values.length >= headers.length) {
+                            const record = {};
+                            headers.forEach((header, index) => {
+                                const value = values[index] ? values[index].replace(/"/g, '').trim() : '';
+                                // Convertir números
+                                if (value && !isNaN(value) && value !== '') {
+                                    record[header] = parseFloat(value);
+                                } else {
+                                    record[header] = value || null;
+                                }
+                            });
+                            csvData.push(record);
+                        }
+                    }
+
+                    console.log('Datos CSV cargados:', csvData.length, 'registros');
+                    
+                    setData(csvData);
+                    calculateStats(csvData);
+                    setIsConfigured(true);
+                    setLastUpdate(new Date().toLocaleString('es-ES'));
+                    
+                } catch (error) {
+                    console.error('Error procesando archivo:', error);
+                    setErrorMessage(`Error al procesar archivo: ${error.message}`);
+                }
+                
+                setLoading(false);
+            };
+
+            // Parsear línea CSV
+            const parseCSVLine = (line) => {
+                const result = [];
+                let current = '';
+                let inQuotes = false;
+                
+                for (let i = 0; i < line.length; i++) {
+                    const char = line[i];
+                    
+                    if (char === '"') {
+                        inQuotes = !inQuotes;
+                    } else if (char === ',' && !inQuotes) {
+                        result.push(current);
+                        current = '';
+                    } else {
+                        current += char;
+                    }
+                }
+                
+                result.push(current);
+                return result;
+            };
+
+            // Calcular estadísticas correctas
+            const calculateStats = (realData) => {
+                if (!realData || realData.length === 0) {
+                    setStats({
+                        total: 0,
+                        adherencia: {},
+                        cargos: {},
+                        interes: {},
+                        municipiosUnicos: 0,
+                        municipiosList: [],
+                        contactosCompletos: 0,
+                        completitudContacto: 0,
+                        tasaAdherencia: 0,
+                        tasaDesconocimiento: 0,
+                        tasaInteres: 0,
+                        registrosValidos: { relas: 0, interes: 0 }
+                    });
+                    return;
+                }
+
+                const total = realData.length;
+                
+                // Mapeos según diccionario REDCap
+                const cargoMap = {
+                    1: "Cargo electo",
+                    2: "Personal técnico", 
+                    3: "Personal administrativo",
+                    4: "Otros"
+                };
+
+                const relasMap = {
+                    0: "Sí adherido",
+                    1: "No adherido", 
+                    9: "No sabe"
+                };
+
+                const interesMap = {
+                    0: "No",
+                    1: "Sí"
+                };
+
+                // Contadores
+                const adherenciaConteo = { "Sí adherido": 0, "No adherido": 0, "No sabe": 0, "Sin respuesta": 0 };
+                const interesConteo = { "Sí": 0, "No": 0, "Sin respuesta": 0 };
+                const cargoConteo = {};
+                
+                // Municipios únicos
+                const municipios = realData.map(r => r.municipio).filter(m => m && m.trim() !== '');
+                const municipiosUnicos = [...new Set(municipios)];
+
+                // Procesar registros
+                realData.forEach(record => {
+                    // Adherencia RELAS
+                    if (record.su_municipio_est_adherido === null || record.su_municipio_est_adherido === undefined) {
+                        adherenciaConteo["Sin respuesta"]++;
+                    } else {
+                        const relasTexto = relasMap[record.su_municipio_est_adherido] || "Valor desconocido";
+                        adherenciaConteo[relasTexto]++;
+                    }
+
+                    // Interés en información
+                    if (record.le_gustar_a_recibir_inform === null || record.le_gustar_a_recibir_inform === undefined) {
+                        interesConteo["Sin respuesta"]++;
+                    } else {
+                        const interesTexto = interesMap[record.le_gustar_a_recibir_inform] || "Valor desconocido";
+                        interesConteo[interesTexto]++;
+                    }
+
+                    // Cargo
+                    if (record.infique_el_cargo_puesto_o === null || record.infique_el_cargo_puesto_o === undefined) {
+                        cargoConteo["Sin especificar"] = (cargoConteo["Sin especificar"] || 0) + 1;
+                    } else {
+                        const cargoTexto = cargoMap[record.infique_el_cargo_puesto_o] || "Valor desconocido";
+                        cargoConteo[cargoTexto] = (cargoConteo[cargoTexto] || 0) + 1;
+                    }
+                });
+
+                // Completitud de contactos
+                const contactosCompletos = realData.filter(r => {
+                    return r.por_favor_indique_un_corre && r.por_favor_indique_un_tel_f && 
+                           r.por_favor_indique_un_corre.includes && r.por_favor_indique_un_corre.includes('@');
+                }).length;
+
+                // Calcular tasas sobre respuestas válidas
+                const registrosValidosRelas = adherenciaConteo["Sí adherido"] + adherenciaConteo["No adherido"] + adherenciaConteo["No sabe"];
+                const registrosValidosInteres = interesConteo["Sí"] + interesConteo["No"];
+
+                const tasaAdherencia = registrosValidosRelas > 0 ? 
+                    (adherenciaConteo["Sí adherido"] / registrosValidosRelas * 100).toFixed(1) : 0;
+                
+                const tasaDesconocimiento = registrosValidosRelas > 0 ? 
+                    (adherenciaConteo["No sabe"] / registrosValidosRelas * 100).toFixed(1) : 0;
+                    
+                const tasaInteres = registrosValidosInteres > 0 ? 
+                    (interesConteo["Sí"] / registrosValidosInteres * 100).toFixed(1) : 0;
+
+                setStats({
+                    total,
+                    adherencia: adherenciaConteo,
+                    cargos: cargoConteo,
+                    interes: interesConteo,
+                    municipiosUnicos: municipiosUnicos.length,
+                    municipiosList: municipiosUnicos,
+                    contactosCompletos,
+                    completitudContacto: total > 0 ? (contactosCompletos / total * 100).toFixed(1) : 0,
+                    tasaAdherencia,
+                    tasaDesconocimiento, 
+                    tasaInteres,
+                    registrosValidos: { relas: registrosValidosRelas, interes: registrosValidosInteres }
+                });
+            };
+
+            // Datos para gráficos
+            const adherenciaData = stats.adherencia ? Object.entries(stats.adherencia)
+                .filter(([key]) => key !== 'Sin respuesta')
+                .map(([key, value]) => ({
+                    name: key,
+                    value,
+                    percentage: stats.registrosValidos?.relas > 0 ? (value / stats.registrosValidos.relas * 100).toFixed(1) : 0
+                })) : [];
+
+            const cargosData = stats.cargos ? Object.entries(stats.cargos)
+                .filter(([key]) => key !== 'Sin especificar')
+                .map(([key, value]) => ({
+                    name: key.length > 20 ? key.substring(0, 20) + '...' : key,
+                    value,
+                    fullName: key
+                })) : [];
+
+            const ADHERENCIA_COLORS = {
+                'Sí adherido': '#4CAF50',
+                'No adherido': '#f44336', 
+                'No sabe': '#ff9800'
+            };
+
+            // Pantalla de configuración
+            if (!isConfigured) {
+                return React.createElement('div', {
+                    className: "min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8"
+                }, 
+                React.createElement('div', {
+                    className: "max-w-xl mx-auto bg-white rounded-xl shadow-lg p-8"
+                }, [
+                    React.createElement('div', {
+                        className: "text-center mb-6",
+                        key: "header"
+                    }, [
+                        React.createElement(Building2, {
+                            className: "w-12 h-12 text-blue-600 mx-auto mb-4",
+                            key: "icon"
+                        }),
+                        React.createElement('h1', {
+                            className: "text-2xl font-bold text-gray-800",
+                            key: "title"
+                        }, "Dashboard RELAS"),
+                        React.createElement('p', {
+                            className: "text-gray-600",
+                            key: "subtitle"
+                        }, "Red Local de Acción en Salud - Andalucía")
+                    ]),
+                    
+                    React.createElement('div', {
+                        className: "space-y-4",
+                        key: "content"
+                    }, [
+                        React.createElement('div', {
+                            className: "bg-green-50 border border-green-200 rounded-lg p-4",
+                            key: "instructions"
+                        }, [
+                            React.createElement('h3', {
+                                className: "font-semibold text-green-800 mb-2",
+                                key: "inst-title"
+                            }, [
+                                React.createElement(FileText, {
+                                    className: "w-4 h-4 inline mr-2",
+                                    key: "file-icon"
+                                }),
+                                "Carga de Archivo CSV"
+                            ]),
+                            React.createElement('p', {
+                                className: "text-green-700 text-sm mb-3",
+                                key: "inst-desc"
+                            }, "Exporta los datos desde REDCap y súbelos aquí."),
+                            React.createElement('div', {
+                                className: "text-xs text-green-600",
+                                key: "inst-steps"
+                            }, [
+                                React.createElement('strong', {key: "bold"}, "Cómo exportar desde REDCap:"),
+                                React.createElement('br', {key: "br1"}),
+                                "1. Ve a \"Data Exports, Reports, and Stats\"",
+                                React.createElement('br', {key: "br2"}),
+                                "2. Selecciona \"Export Data\"",
+                                React.createElement('br', {key: "br3"}),
+                                "3. Formato: CSV / Microsoft Excel",
+                                React.createElement('br', {key: "br4"}),
+                                "4. Raw or label data: \"Raw\"",
+                                React.createElement('br', {key: "br5"}),
+                                "5. Descarga y sube el archivo aquí"
+                            ])
+                        ]),
+                        
+                        React.createElement('div', {
+                            className: "border-2 border-dashed border-gray-300 rounded-lg p-6 text-center",
+                            key: "upload-area"
+                        }, [
+                            React.createElement(Upload, {
+                                className: "w-12 h-12 text-gray-400 mx-auto mb-4",
+                                key: "upload-icon"
+                            }),
+                            React.createElement('input', {
+                                type: "file",
+                                accept: ".csv",
+                                onChange: handleFileUpload,
+                                className: "hidden",
+                                id: "csvFile",
+                                key: "file-input"
+                            }),
+                            React.createElement('label', {
+                                htmlFor: "csvFile",
+                                className: "cursor-pointer text-blue-600 hover:text-blue-700 font-medium",
+                                key: "file-label"
+                            }, "Seleccionar archivo CSV"),
+                            React.createElement('p', {
+                                className: "text-sm text-gray-500 mt-2",
+                                key: "file-desc"
+                            }, "Sube tu archivo CSV exportado de REDCap")
+                        ]),
+                        
+                        errorMessage && React.createElement('div', {
+                            className: "bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded",
+                            key: "error"
+                        }, errorMessage),
+                        
+                        loading && React.createElement('div', {
+                            className: "text-center py-4",
+                            key: "loading"
+                        }, [
+                            React.createElement(RefreshCw, {
+                                className: "w-6 h-6 animate-spin mx-auto mb-2 text-blue-600",
+                                key: "loading-icon"
+                            }),
+                            React.createElement('p', {
+                                className: "text-blue-600",
+                                key: "loading-text"
+                            }, "Procesando archivo...")
+                        ])
+                    ])
+                ]));
+            }
+
+            // Dashboard principal
+            return React.createElement('div', {
+                className: "min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4"
+            }, [
+                // Header
+                React.createElement('div', {
+                    className: "bg-white rounded-xl shadow-lg p-6 mb-6",
+                    key: "header"
+                }, [
+                    React.createElement('div', {
+                        className: "flex flex-col lg:flex-row lg:items-center lg:justify-between",
+                        key: "header-content"
+                    }, [
+                        React.createElement('div', {key: "header-left"}, [
+                            React.createElement('h1', {
+                                className: "text-3xl font-bold text-gray-800 mb-2",
+                                key: "title"
+                            }, "Dashboard RELAS"),
+                            React.createElement('p', {
+                                className: "text-gray-600",
+                                key: "subtitle"
+                            }, "Red Local de Acción en Salud - Andalucía"),
+                            React.createElement('div', {
+                                className: "flex items-center gap-4 mt-2 text-sm text-gray-500",
+                                key: "info"
+                            }, [
+                                React.createElement('span', {key: "file-type"}, "📁 Archivo CSV"),
+                                React.createElement('span', {key: "record-count"}, `📊 ${stats.total || 0} registros`),
+                                React.createElement('span', {key: "last-update"}, `📅 ${lastUpdate}`)
+                            ])
+                        ]),
+                        
+                        React.createElement('div', {
+                            className: "flex items-center gap-4 mt-4 lg:mt-0",
+                            key: "header-buttons"
+                        }, [
+                            React.createElement('button', {
+                                onClick: () => {
+                                    setIsConfigured(false);
+                                    setData([]);
+                                    setStats({});
+                                },
+                                className: "flex items-center gap-2 bg-gray-500 text-white px-4 py-2 rounded-lg hover:bg-gray-600 transition-colors",
+                                key: "change-file-btn"
+                            }, [
+                                React.createElement(RefreshCw, {
+                                    className: "w-4 h-4",
+                                    key: "refresh-icon"
+                                }),
+                                "Cambiar Archivo"
+                            ])
+                        ])
+                    ])
+                ]),
+
+                // KPIs
+                React.createElement('div', {
+                    className: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6",
+                    key: "kpis"
+                }, [
+                    React.createElement('div', {
+                        className: "bg-white rounded-xl shadow-lg p-6",
+                        key: "kpi-total"
+                    }, React.createElement('div', {
+                        className: "flex items-center justify-between"
+                    }, [
+                        React.createElement('div', {key: "kpi-total-content"}, [
+                            React.createElement('p', {
+                                className: "text-sm font-medium text-gray-500",
+                                key: "kpi-total-label"
+                            }, "Total Respuestas"),
+                            React.createElement('p', {
+                                className: "text-2xl font-bold text-gray-900",
+                                key: "kpi-total-value"
+                            }, stats.total || 0)
+                        ]),
+                        React.createElement(Users, {
+                            className: "w-8 h-8 text-blue-600",
+                            key: "kpi-total-icon"
+                        })
+                    ])),
+
+                    React.createElement('div', {
+                        className: "bg-white rounded-xl shadow-lg p-6",
+                        key: "kpi-adherencia"
+                    }, React.createElement('div', {
+                        className: "flex items-center justify-between"
+                    }, [
+                        React.createElement('div', {key: "kpi-adh-content"}, [
+                            React.createElement('p', {
+                                className: "text-sm font-medium text-gray-500",
+                                key: "kpi-adh-label"
+                            }, "Adherencia RELAS"),
+                            React.createElement('p', {
+                                className: "text-2xl font-bold text-green-600",
+                                key: "kpi-adh-value"
+                            }, `${stats.tasaAdherencia}%`),
+                            React.createElement('p', {
+                                className: "text-xs text-gray-400",
+                                key: "kpi-adh-detail"
+                            }, `(${stats.registrosValidos?.relas || 0} respuestas válidas)`)
+                        ]),
+                        React.createElement(CheckCircle, {
+                            className: "w-8 h-8 text-green-600",
+                            key: "kpi-adh-icon"
+                        })
+                    ])),
+
+                    React.createElement('div', {
+                        className: "bg-white rounded-xl shadow-lg p-6",
+                        key: "kpi-desconocimiento"
+                    }, React.createElement('div', {
+                        className: "flex items-center justify-between"
+                    }, [
+                        React.createElement('div', {key: "kpi-desc-content"}, [
+                            React.createElement('p', {
+                                className: "text-sm font-medium text-gray-500",
+                                key: "kpi-desc-label"
+                            }, "Desconocimiento"),
+                            React.createElement('p', {
+                                className: "text-2xl font-bold text-orange-600",
+                                key: "kpi-desc-value"
+                            }, `${stats.tasaDesconocimiento}%`),
+                            React.createElement('p', {
+                                className: "text-xs text-gray-400",
+                                key: "kpi-desc-detail"
+                            }, `(${stats.registrosValidos?.relas || 0} respuestas válidas)`)
+                        ]),
+                        React.createElement(HelpCircle, {
+                            className: "w-8 h-8 text-orange-600",
+                            key: "kpi-desc-icon"
+                        })
+                    ])),
+
+                    React.createElement('div', {
+                        className: "bg-white rounded-xl shadow-lg p-6",
+                        key: "kpi-interes"
+                    }, React.createElement('div', {
+                        className: "flex items-center justify-between"
+                    }, [
+                        React.createElement('div', {key: "kpi-int-content"}, [
+                            React.createElement('p', {
+                                className: "text-sm font-medium text-gray-500",
+                                key: "kpi-int-label"
+                            }, "Interés en Info"),
+                            React.createElement('p', {
+                                className: "text-2xl font-bold text-blue-600",
+                                key: "kpi-int-value"
+                            }, `${stats.tasaInteres}%`),
+                            React.createElement('p', {
+                                className: "text-xs text-gray-400",
+                                key: "kpi-int-detail"
+                            }, `(${stats.registrosValidos?.interes || 0} respuestas válidas)`)
+                        ]),
+                        React.createElement(TrendingUp, {
+                            className: "w-8 h-8 text-blue-600",
+                            key: "kpi-int-icon"
+                        })
+                    ]))
+                ]),
+
+                // Mensaje si no hay datos
+                data.length === 0 && React.createElement('div', {
+                    className: "bg-yellow-50 border border-yellow-200 rounded-xl p-6 mb-6 text-center",
+                    key: "no-data"
+                }, [
+                    React.createElement('h3', {
+                        className: "text-lg font-semibold text-yellow-800 mb-2",
+                        key: "no-data-title"
+                    }, "No hay datos para mostrar"),
+                    React.createElement('p', {
+                        className: "text-yellow-700",
+                        key: "no-data-desc"
+                    }, "Sube un archivo CSV con los datos exportados de REDCap.")
+                ]),
+
+                // Resumen final
+                data.length > 0 && React.createElement('div', {
+                    className: "bg-white rounded-xl shadow-lg p-6",
+                    key: "summary"
+                }, [
+                    React.createElement('h3', {
+                        className: "text-xl font-semibold text-gray-800 mb-4",
+                        key: "summary-title"
+                    }, "Resumen del Proyecto RELAS"),
+                    React.createElement('div', {
+                        className: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4",
+                        key: "summary-grid"
+                    }, [
+                        React.createElement('div', {
+                            className: "text-center",
+                            key: "summary-total"
+                        }, [
+                            React.createElement('div', {
+                                className: "text-2xl font-bold text-blue-600",
+                                key: "summary-total-num"
+                            }, stats.total),
+                            React.createElement('div', {
+                                className: "text-sm text-gray-600",
+                                key: "summary-total-label"
+                            }, "Respuestas totales")
+                        ]),
+                        React.createElement('div', {
+                            className: "text-center",
+                            key: "summary-adherencia"
+                        }, [
+                            React.createElement('div', {
+                                className: "text-2xl font-bold text-green-600",
+                                key: "summary-adh-num"
+                            }, `${stats.tasaAdherencia}%`),
+                            React.createElement('div', {
+                                className: "text-sm text-gray-600",
+                                key: "summary-adh-label"
+                            }, "Adherencia RELAS")
+                        ]),
+                        React.createElement('div', {
+                            className: "text-center",
+                            key: "summary-municipios"
+                        }, [
+                            React.createElement('div', {
+                                className: "text-2xl font-bold text-purple-600",
+                                key: "summary-mun-num"
+                            }, stats.municipiosUnicos),
+                            React.createElement('div', {
+                                className: "text-sm text-gray-600",
+                                key: "summary-mun-label"
+                            }, "Municipios únicos")
+                        ]),
+                        React.createElement('div', {
+                            className: "text-center",
+                            key: "summary-interes"
+                        }, [
+                            React.createElement('div', {
+                                className: "text-2xl font-bold text-blue-600",
+                                key: "summary-int-num"
+                            }, `${stats.tasaInteres}%`),
+                            React.createElement('div', {
+                                className: "text-sm text-gray-600",
+                                key: "summary-int-label"
+                            }, "Interés en información")
+                        ])
+                    ])
+                ]),
+
+                // Footer
+                React.createElement('div', {
+                    className: "mt-8 text-center text-sm text-gray-500",
+                    key: "footer"
+                }, [
+                    React.createElement('p', {key: "footer-title"}, "Dashboard RELAS - Proyecto Granada Salud"),
+                    data.length > 0 && React.createElement('p', {key: "footer-count"}, `Mostrando ${data.length} registros del archivo CSV`)
+                ])
+            ]);
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement(Dashboard));
+    </script>
+</body>
+</html>
